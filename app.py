@@ -27,17 +27,18 @@ def clean_val(x):
 # --- DATA CALCULATION ENGINE ---
 @st.cache_data
 def run_financial_engine():
-    # 1. Load Files (Force EAN as String)
+    # 1. Load Files (Force EAN as String from the start)
     df_vol = pd.read_csv('CSV/Vol_Actuals_2024_2025.csv', dtype={'EAN Code': str})
     df_pri = pd.read_csv('CSV/Pricing_Cost.csv', dtype={'EAN': str})
     df_tra = pd.read_csv('CSV/Trade_Spend.csv')
 
-    # 2. Key Normalization
-    df_vol['EAN_Key'] = df_vol['EAN Code'].str.strip().str.split('.').str[0]
-    df_pri['EAN_Key'] = df_pri['EAN'].str.strip().str.split('.').str[0]
+    # 2. Key Normalization (Ensuring String type to avoid scientific notation or truncation)
+    df_vol['EAN_Key'] = df_vol['EAN Code'].astype(str).str.strip().str.split('.').str[0]
+    df_pri['EAN_Key'] = df_pri['EAN'].astype(str).str.strip().str.split('.').str[0]
     
     for col in ['List Price', 'Std Cost', 'GTG %']:
         df_pri[col] = df_pri[col].apply(clean_val)
+    
     df_pri['GTG %'] = df_pri['GTG %'] / 100
     df_tra['Percentage'] = df_tra['Percentage'].apply(clean_val) / 100
 
@@ -45,6 +46,7 @@ def run_financial_engine():
     df_master = df_vol.groupby(['Year', 'Channel', 'Category', 'Customer Name', 'EAN_Key']).agg({'Units': 'sum'}).reset_index()
 
     # 4. Merges (Price, Costs and Trade Spend)
+    # The merge now happens on string-to-string keys
     df_master = pd.merge(df_master, df_pri[['Year', 'Channel', 'EAN_Key', 'List Price', 'Std Cost', 'GTG %']], 
                          on=['Year', 'Channel', 'EAN_Key'], how='left').fillna(0)
     
@@ -52,7 +54,7 @@ def run_financial_engine():
     df_tra_pct.rename(columns={'Percentage': 'TS_Policy_Pct'}, inplace=True)
     df_master = pd.merge(df_master, df_tra_pct, on=['Year', 'Channel', 'Category'], how='left').fillna(0)
 
-    # 5. Financial Calculations (Weighted to SKU/Customer level)
+    # 5. Financial Calculations
     df_master['Gross Sales'] = df_master['Units'] * df_master['List Price']
     df_master['Off_Invoice'] = df_master['Gross Sales'] * df_master['GTG %']
     df_master['GTS'] = df_master['Gross Sales'] - df_master['Off_Invoice']
@@ -80,7 +82,10 @@ df_f = df_all[(df_all['Year'] == sel_year) &
 
 # --- DASHBOARD TABS ---
 st.title(f"📊 Financial Performance Engine - {sel_year}")
-tab_pl, tab_weights, tab_pvm, tab_download = st.tabs(["📉 P&L Summary", "⚖️ Mix Weights", "🌊 PVM Analysis", "📥 Raw Data"])
+# Added Tab for Units by EAN
+tab_pl, tab_weights, tab_pvm, tab_ean, tab_download = st.tabs([
+    "📉 P&L Summary", "⚖️ Mix Weights", "🌊 PVM Analysis", "📦 Units by EAN", "📥 Raw Data"
+])
 
 with tab_pl:
     # Top Level Metrics
@@ -154,7 +159,6 @@ with tab_pvm:
         
         df_pvm = pd.DataFrame(pvm_list)
         
-        # Waterfall Chart
         fig_wf = go.Figure(go.Waterfall(
             orientation = "v",
             measure = ["absolute", "relative", "relative", "relative", "total"],
@@ -172,10 +176,46 @@ with tab_pvm:
     else:
         st.warning("Insufficient data for previous year PVM.")
 
+with tab_ean:
+    st.subheader("📦 Units and Performance by Product (EAN)")
+    
+    # Aggregate data by EAN_Key
+    df_ean = df_f.groupby(['EAN_Key', 'Category']).agg({
+        'Units': 'sum',
+        'Gross Sales': 'sum',
+        'Net_Total_Sales': 'sum',
+        'Gross_Profit': 'sum'
+    }).reset_index().sort_values(by='Units', ascending=False)
+    
+    # Important: format EAN_Key as string to prevent commas or scientific notation
+    st.dataframe(
+        df_ean.style.format({
+            'EAN_Key': lambda x: str(x),
+            'Units': '{:,.0f}',
+            'Gross Sales': '${:,.2f}',
+            'Net_Total_Sales': '${:,.2f}',
+            'Gross_Profit': '${:,.2f}'
+        }),
+        use_container_width=True,
+        hide_index=True
+    )
+
 with tab_download:
     st.subheader("Raw Account Data")
     export_cols = ['Channel', 'Category', 'Customer Name', 'EAN_Key', 'Units', 'Gross Sales', 'Net_Total_Sales', 'Gross_Profit']
-    st.dataframe(df_f[export_cols].style.format({'Units':'{:,.0f}', 'Gross Sales':'${:,.2f}', 'Net_Total_Sales':'${:,.2f}', 'Gross_Profit':'${:,.2f}'}), use_container_width=True, hide_index=True)
+    
+    # Using lambda in format to ensure EAN_Key displays correctly here too
+    st.dataframe(
+        df_f[export_cols].style.format({
+            'EAN_Key': lambda x: str(x),
+            'Units':'{:,.0f}', 
+            'Gross Sales':'${:,.2f}', 
+            'Net_Total_Sales':'${:,.2f}', 
+            'Gross_Profit':'${:,.2f}'
+        }), 
+        use_container_width=True, 
+        hide_index=True
+    )
     
     csv = df_f[export_cols].to_csv(index=False).encode('utf-8')
     st.download_button("📥 Download Excel/CSV Report", csv, f"Financial_Report_{sel_year}.csv", "text/csv")
