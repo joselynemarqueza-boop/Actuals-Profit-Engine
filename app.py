@@ -220,17 +220,16 @@ with tab_ean:
     )
 
 with tab_download:
-    st.subheader("📄 Raw Account Data (Full P&L to Gross Profit)")
+    st.subheader("📄 Raw Account Data (Absolute Values to GP Level)")
 
-    # 1. Load Trade Spend Rules from your uploaded CSV
+    # 1. Load Trade Spend Rules
     df_tra_rules = pd.read_csv('CSV/Trade_Spend.csv')
     df_tra_rules['Percentage'] = df_tra_rules['Percentage'].apply(clean_val) / 100
 
-    # 2. Build the Raw Data rows
+    # 2. Build the Raw Data rows using absolute values
     raw_data_list = []
 
     for _, row in df_f.iterrows():
-        # Metadata for each row
         common = {
             'Year': row['Year'], 
             'Channel': row['Channel'], 
@@ -239,16 +238,16 @@ with tab_download:
             'EAN': row['EAN_Key']
         }
         
-        # --- REVENUE & DIRECT DISCOUNTS ---
-        # Gross Sales (Positive)
-        raw_data_list.append({**common, 'Account code': 'GS-001', 'Account': 'Gross Sales', 'Value': row['Gross Sales']})
+        # --- ALL VALUES ARE NOW ABSOLUTE (POSITIVE) ---
         
-        # Off-Invoice (Negative - Reduction of Revenue)
+        # Gross Sales
+        raw_data_list.append({**common, 'Account code': 'GS-001', 'Account': 'Gross Sales', 'Value': abs(row['Gross Sales'])})
+        
+        # Off-Invoice
         if row['Off_Invoice'] != 0:
-            raw_data_list.append({**common, 'Account code': 'OI-001', 'Account': 'Off-Invoice', 'Value': -row['Off_Invoice']})
+            raw_data_list.append({**common, 'Account code': 'OI-001', 'Account': 'Off-Invoice', 'Value': abs(row['Off_Invoice'])})
 
-        # --- TRADE SPEND BREAKDOWN (Negatives) ---
-        # Filter trade rules that match the current row's context
+        # Trade Spend Breakdown
         specific_trade = df_tra_rules[
             (df_tra_rules['Year'] == row['Year']) & 
             (df_tra_rules['Channel'] == row['Channel']) & 
@@ -262,20 +261,19 @@ with tab_download:
                     **common, 
                     'Account code': trade_rule['Account Code'], 
                     'Account': trade_rule['Account Name'], 
-                    'Value': -trade_value
+                    'Value': abs(trade_value)
                 })
 
-        # --- COSTS (Negatives) ---
-        # COGS (Cost of Goods Sold)
+        # Cost of Goods Sold
         if row['COGS'] != 0:
-            raw_data_list.append({**common, 'Account code': 'CS-001', 'Account': 'COGS', 'Value': -row['COGS']})
+            raw_data_list.append({**common, 'Account code': 'CS-001', 'Account': 'COGS', 'Value': abs(row['COGS'])})
 
-    # 3. Create Final DataFrame
-    df_raw_pnl = pd.DataFrame(raw_data_list)
+    # 3. Create DataFrame
+    df_raw_absolute = pd.DataFrame(raw_data_list)
 
     # 4. Streamlit Display
     st.dataframe(
-        df_raw_pnl.style.format({
+        df_raw_absolute.style.format({
             'EAN': lambda x: str(x),
             'Value': '${:,.2f}'
         }),
@@ -284,10 +282,10 @@ with tab_download:
     )
 
     # 5. Export Button
-    csv_raw = df_raw_pnl.to_csv(index=False).encode('utf-8')
+    csv_raw = df_raw_absolute.to_csv(index=False).encode('utf-8')
     st.download_button(
-        label="📥 Download Full P&L Raw Data (GP Level)", 
+        label="📥 Download Absolute Value P&L Report", 
         data=csv_raw, 
-        file_name=f"Detailed_Financial_Data_{sel_year}.csv", 
+        file_name=f"Absolute_Financial_Data_{sel_year}.csv", 
         mime="text/csv"
     )
