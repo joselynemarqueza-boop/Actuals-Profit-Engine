@@ -19,6 +19,15 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
+
+# --- COLOQUÉ TU LINK AQUÍ ---
+    st.markdown("---")
+    st.caption("Environment: Free Tier")
+    st.markdown(
+        f'<a href="https://www.linkedin.com/in/joselyne-marquez/" target="_blank" class="author-link">'
+        f'👤 Author: JosyMarquez</a>', 
+        unsafe_allow_html=True
+    )
 def clean_val(x):
     if isinstance(x, str):
         return float(x.replace('$', '').replace('%', '').replace(',', '').strip())
