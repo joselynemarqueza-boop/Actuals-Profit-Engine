@@ -6,7 +6,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="NovaPure | Profitability Analytics", layout="wide")
+st.set_page_config(page_title="Profitability Analytics", layout="wide")
 
 # Custom CSS for White Labels in Sidebar
 st.markdown("""
