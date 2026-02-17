@@ -154,3 +154,40 @@ with tab_download:
     
     csv = df_f[export_cols].to_csv(index=False).encode('utf-8')
     st.download_button("📥 Download Financial Data", csv, f"NovaPure_Data_{sel_year}.csv", "text/csv")
+@st.cache_data
+def run_financial_engine():
+    # 1. Load Files
+    df_vol = pd.read_csv('CSV/Vol_Actuals_2024_2025.csv', dtype={'EAN Code': str})
+    df_pri = pd.read_csv('CSV/Pricing_Cost.csv', dtype={'EAN': str})
+    df_tra = pd.read_csv('CSV/Trade_Spend.csv')
+
+    # 2. CLEANING EANS (The critical fix)
+    # This removes .0 and spaces to ensure "5" matches "5" or "750..." matches "750..."
+    df_vol['EAN_Key'] = df_vol['EAN Code'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+    df_pri['EAN_Key'] = df_pri['EAN'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+    
+    # 3. Clean numeric columns
+    for col in ['List Price', 'Std Cost', 'GTG %']:
+        df_pri[col] = df_pri[col].apply(clean_val)
+    df_pri['GTG %'] = df_pri['GTG %'] / 100
+    df_tra['Percentage'] = df_tra['Percentage'].apply(clean_val) / 100
+
+    # 4. Aggregate Volume
+    df_master = df_vol.groupby(['Year', 'Channel', 'Category', 'Customer Name', 'EAN_Key']).agg({'Units': 'sum'}).reset_index()
+
+    # 5. MERGE (Join Pricing with Volume)
+    # We join on Year, Channel, and EAN_Key to get the right price for the right period
+    df_master = pd.merge(
+        df_master, 
+        df_pri[['Year', 'Channel', 'EAN_Key', 'List Price', 'Std Cost', 'GTG %']], 
+        on=['Year', 'Channel', 'EAN_Key'], 
+        how='left'
+    )
+    
+    # Fill missing prices with 0 to avoid calculation errors
+    df_master.fillna(0, inplace=True)
+
+    # 6. Financial Calculations
+    df_master['Gross Sales'] = df_master['Units'] * df_master['List Price']
+    # ... (rest of your P&L logic)
+    return df_master
