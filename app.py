@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Profitability Analytics", layout="wide")
 
-# Custom CSS for White Labels in Sidebar
+# Custom CSS
 st.markdown("""
     <style>
     [data-testid="stSidebar"] { background-color: #002b50; }
@@ -16,18 +16,21 @@ st.markdown("""
     [data-testid="stSidebar"] hr { border-color: rgba(255, 255, 255, 0.3) !important; }
     div[data-baseweb="select"] > div { background-color: white; }
     .stMetric { background-color: #ffffff; border-radius: 10px; padding: 15px; border: 1px solid #e0e0e0; }
+    
+    /* Estilo para tu link de LinkedIn */
+    .author-link {
+        font-size: 0.85rem;
+        color: rgba(255, 255, 255, 0.7) !important;
+        text-decoration: none;
+        transition: 0.3s;
+    }
+    .author-link:hover {
+        color: #00cc96 !important;
+        text-decoration: underline;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-
-# --- COLOQUÉ TU LINK AQUÍ ---
-    st.markdown("---")
-    st.caption("Environment: Free Tier")
-    st.markdown(
-        f'<a href="https://www.linkedin.com/in/joselyne-marquez/" target="_blank" class="author-link">'
-        f'👤 Author: JosyMarquez</a>', 
-        unsafe_allow_html=True
-    )
 def clean_val(x):
     if isinstance(x, str):
         return float(x.replace('$', '').replace('%', '').replace(',', '').strip())
@@ -36,12 +39,12 @@ def clean_val(x):
 # --- DATA CALCULATION ENGINE ---
 @st.cache_data
 def run_financial_engine():
-    # 1. Load Files (Force EAN as String from the start)
+    # 1. Load Files
     df_vol = pd.read_csv('CSV/Vol_Actuals_2024_2025.csv', dtype={'EAN Code': str})
     df_pri = pd.read_csv('CSV/Pricing_Cost.csv', dtype={'EAN': str})
     df_tra = pd.read_csv('CSV/Trade_Spend.csv')
 
-    # 2. Key Normalization (Ensuring String type to avoid scientific notation or truncation)
+    # 2. Key Normalization
     df_vol['EAN_Key'] = df_vol['EAN Code'].astype(str).str.strip().str.split('.').str[0]
     df_pri['EAN_Key'] = df_pri['EAN'].astype(str).str.strip().str.split('.').str[0]
     
@@ -51,11 +54,10 @@ def run_financial_engine():
     df_pri['GTG %'] = df_pri['GTG %'] / 100
     df_tra['Percentage'] = df_tra['Percentage'].apply(clean_val) / 100
 
-    # 3. Aggregate Volume by Customer and SKU
+    # 3. Aggregate Volume
     df_master = df_vol.groupby(['Year', 'Channel', 'Category', 'Customer Name', 'EAN_Key']).agg({'Units': 'sum'}).reset_index()
 
-    # 4. Merges (Price, Costs and Trade Spend)
-    # The merge now happens on string-to-string keys
+    # 4. Merges
     df_master = pd.merge(df_master, df_pri[['Year', 'Channel', 'EAN_Key', 'List Price', 'Std Cost', 'GTG %']], 
                          on=['Year', 'Channel', 'EAN_Key'], how='left').fillna(0)
     
@@ -84,6 +86,15 @@ with st.sidebar:
     sel_chan = st.multiselect("🏪 Channel", sorted(df_all['Channel'].unique()), default=df_all['Channel'].unique(), key="c")
     sel_cat = st.multiselect("🏷️ Category", sorted(df_all['Category'].unique()), default=df_all['Category'].unique(), key="b")
 
+    # --- FOOTER AUTOR (Mantenlo indentado aquí) ---
+    st.markdown("---")
+    st.caption("Environment: Free Tier")
+    st.markdown(
+        f'<a href="https://www.linkedin.com/in/joselyne-marquez/" target="_blank" class="author-link">'
+        f'👤 Author: JosyMarquez</a>', 
+        unsafe_allow_html=True
+    )
+
 # Apply Filters
 df_f = df_all[(df_all['Year'] == sel_year) & 
                 (df_all['Channel'].isin(sel_chan)) & 
@@ -91,7 +102,6 @@ df_f = df_all[(df_all['Year'] == sel_year) &
 
 # --- DASHBOARD TABS ---
 st.title(f"📊 Financial Performance Engine - {sel_year}")
-# Added Tab for Units by EAN
 tab_pl, tab_weights, tab_pvm, tab_ean, tab_download = st.tabs([
     "📉 P&L Summary", "⚖️ Mix Weights", "🌊 PVM Analysis", "📦 Units by EAN", "📥 Raw Data"
 ])
