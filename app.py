@@ -6,7 +6,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 # --- PAGE CONFIGURATION ---
-st.set_config(page_title="NovaPure | Profitability Analytics", layout="wide")
+# Fixed the function name from set_config to set_page_config
+st.set_page_config(page_title="NovaPure | Profitability Analytics", layout="wide")
 
 # Custom CSS for NovaPure Theme
 st.markdown("""
@@ -30,8 +31,7 @@ def run_financial_engine():
     df_pri = pd.read_csv('CSV/Pricing_Cost.csv', dtype={'EAN': str})
     df_tra = pd.read_csv('CSV/Trade_Spend.csv')
 
-    # 2. ROBUST EAN CLEANING (Prevents $0 values)
-    # This removes .0 and spaces to ensure "5" matches "5" or "750..." matches "750..."
+    # 2. ROBUST EAN CLEANING
     df_vol['EAN_Key'] = df_vol['EAN Code'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
     df_pri['EAN_Key'] = df_pri['EAN'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
     
@@ -48,7 +48,6 @@ def run_financial_engine():
     df_master = pd.merge(df_master, df_pri[['Year', 'Channel', 'EAN_Key', 'List Price', 'Std Cost', 'GTG %']], 
                          on=['Year', 'Channel', 'EAN_Key'], how='left')
     
-    # Check for missing prices before filling with 0
     df_master.fillna(0, inplace=True)
 
     # 6. Financial Calculations
@@ -78,7 +77,7 @@ with st.sidebar:
 
 df_f = df_all[(df_all['Year'] == sel_year) & 
                 (df_all['Channel'].isin(sel_chan)) & 
-                (df_f['Category'].isin(sel_cat))]
+                (df_all['Category'].isin(sel_cat))]
 
 # --- DASHBOARD ---
 st.title(f"📊 Profitability Engine - {sel_year}")
@@ -103,21 +102,8 @@ with tab_pl:
 
 with tab_ean:
     st.subheader("Total Volume by EAN Code")
-    st.write("This table shows the total units sold per product (EAN) for the selected filters.")
-    
-    ean_summary = df_f.groupby(['EAN_Key', 'Category']).agg({
-        'Units': 'sum'
-    }).sort_values('Units', ascending=False).reset_index()
-
-    st.dataframe(
-        ean_summary.style.format({'Units': '{:,.0f}'}),
-        use_container_width=True,
-        hide_index=True
-    )
-
-    # Specific Download for EAN Volume
-    csv_ean = ean_summary.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Download EAN Volume List", csv_ean, f"EAN_Volume_{sel_year}.csv", "text/csv")
+    ean_summary = df_f.groupby(['EAN_Key', 'Category']).agg({'Units': 'sum'}).sort_values('Units', ascending=False).reset_index()
+    st.dataframe(ean_summary.style.format({'Units': '{:,.0f}'}), use_container_width=True, hide_index=True)
 
 with tab_download:
     st.subheader("Detailed Export View")
