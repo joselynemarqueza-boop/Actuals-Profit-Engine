@@ -1,90 +1,181 @@
 import streamlit as st
 import pandas as pd
+import os
 import io
+import plotly.express as px
+import plotly.graph_objects as go
 
-st.set_page_config(page_title="NovaPure Engine", layout="wide")
+# --- PAGE CONFIGURATION ---
+st.set_page_config(page_title="NovaPure | Profitability Analytics", layout="wide")
 
-def clean_numeric(x):
+# Custom CSS for White Labels in Sidebar
+st.markdown("""
+    <style>
+    [data-testid="stSidebar"] { background-color: #002b50; }
+    [data-testid="stSidebar"] h1, [data-testid="stSidebar"] label, [data-testid="stSidebar"] .stMarkdown p { color: white !important; }
+    [data-testid="stSidebar"] hr { border-color: rgba(255, 255, 255, 0.3) !important; }
+    div[data-baseweb="select"] > div { background-color: white; }
+    .stMetric { background-color: #ffffff; border-radius: 10px; padding: 15px; border: 1px solid #e0e0e0; }
+    </style>
+    """, unsafe_allow_html=True)
+
+def clean_val(x):
     if isinstance(x, str):
-        # Limpia símbolos de moneda y porcentajes
         return float(x.replace('$', '').replace('%', '').replace(',', '').strip())
     return x
 
-st.title("Actuals Profit Engine")
-
-# --- CARGA DE DATOS ---
-try:
-    # Usamos la carpeta 'CSV' como indicaste
-    df_vol = pd.read_csv('CSV/Vol_Actuals_2024_2025.csv')
-    df_pri = pd.read_csv('CSV/Pricing_Cost.csv')
+# --- DATA CALCULATION ENGINE ---
+@st.cache_data
+def run_financial_engine():
+    # 1. Load Files (Force EAN as String)
+    df_vol = pd.read_csv('CSV/Vol_Actuals_2024_2025.csv', dtype={'EAN Code': str})
+    df_pri = pd.read_csv('CSV/Pricing_Cost.csv', dtype={'EAN': str})
     df_tra = pd.read_csv('CSV/Trade_Spend.csv')
-    st.sidebar.success("Archivos cargados correctamente.")
-except Exception as e:
-    st.error(f"Error de archivos: Asegúrate de que la carpeta se llame 'CSV' y los nombres de los archivos sean exactos.")
-    st.info("Estructura requerida: CSV/Vol_Actuals_2024_2025.csv, CSV/Pricing_Cost.csv, CSV/Trade_Spend.csv")
-    st.stop()
 
-if st.button("Calcular Rentabilidad"):
-    try:
-        # 1. Limpieza de Precios y Costos
-        df_pri['List Price'] = df_pri['List Price'].apply(clean_numeric)
-        df_pri['Std Cost'] = df_pri['Std Cost'].apply(clean_numeric)
-        df_pri['GTG %'] = df_pri['GTG %'].apply(clean_numeric) / 100
-        df_tra['Percentage'] = df_tra['Percentage'].apply(clean_numeric) / 100
+    # 2. Key Normalization
+    df_vol['EAN_Key'] = df_vol['EAN Code'].str.strip().str.split('.').str[0]
+    df_pri['EAN_Key'] = df_pri['EAN'].str.strip().str.split('.').str[0]
+    
+    for col in ['List Price', 'Std Cost', 'GTG %']:
+        df_pri[col] = df_pri[col].apply(clean_val)
+    df_pri['GTG %'] = df_pri['GTG %'] / 100
+    df_tra['Percentage'] = df_tra['Percentage'].apply(clean_val) / 100
 
-        # 2. Cruce de Volumen con Precios
-        # Nota: En tu archivo de volumen la columna es 'Units'
-        df_master = pd.merge(
-            df_vol, 
-            df_pri[['Year', 'EAN', 'Channel', 'List Price', 'Std Cost', 'GTG %']], 
-            left_on=['Year', 'EAN Code', 'Channel'],
-            right_on=['Year', 'EAN', 'Channel'],
-            how='left'
+    # 3. Aggregate Volume by Customer and SKU
+    df_master = df_vol.groupby(['Year', 'Channel', 'Category', 'Customer Name', 'EAN_Key']).agg({'Units': 'sum'}).reset_index()
+
+    # 4. Merges (Price, Costs and Trade Spend)
+    df_master = pd.merge(df_master, df_pri[['Year', 'Channel', 'EAN_Key', 'List Price', 'Std Cost', 'GTG %']], 
+                         on=['Year', 'Channel', 'EAN_Key'], how='left').fillna(0)
+    
+    df_tra_pct = df_tra.groupby(['Year', 'Channel', 'Category']).agg({'Percentage': 'sum'}).reset_index()
+    df_tra_pct.rename(columns={'Percentage': 'TS_Policy_Pct'}, inplace=True)
+    df_master = pd.merge(df_master, df_tra_pct, on=['Year', 'Channel', 'Category'], how='left').fillna(0)
+
+    # 5. Financial Calculations (Weighted to SKU/Customer level)
+    df_master['Gross Sales'] = df_master['Units'] * df_master['List Price']
+    df_master['Off_Invoice'] = df_master['Gross Sales'] * df_master['GTG %']
+    df_master['GTS'] = df_master['Gross Sales'] - df_master['Off_Invoice']
+    df_master['Trade_Spend_Value'] = df_master['Gross Sales'] * df_master['TS_Policy_Pct']
+    df_master['Net_Total_Sales'] = df_master['GTS'] - df_master['Trade_Spend_Value']
+    df_master['COGS'] = df_master['Units'] * df_master['Std Cost']
+    df_master['Gross_Profit'] = df_master['Net_Total_Sales'] - df_master['COGS']
+
+    return df_master
+
+df_all = run_financial_engine()
+
+# --- SIDEBAR FILTERS ---
+with st.sidebar:
+    st.title("🌐 Global Filters")
+    st.divider()
+    sel_year = st.selectbox("📅 Year", sorted(df_all['Year'].unique(), reverse=True), key="y")
+    sel_chan = st.multiselect("🏪 Channel", sorted(df_all['Channel'].unique()), default=df_all['Channel'].unique(), key="c")
+    sel_cat = st.multiselect("🏷️ Category", sorted(df_all['Category'].unique()), default=df_all['Category'].unique(), key="b")
+
+# Apply Filters
+df_f = df_all[(df_all['Year'] == sel_year) & 
+                (df_all['Channel'].isin(sel_chan)) & 
+                (df_all['Category'].isin(sel_cat))]
+
+# --- DASHBOARD TABS ---
+st.title(f"📊 Financial Performance Engine - {sel_year}")
+tab_pl, tab_weights, tab_pvm, tab_download = st.tabs(["📉 P&L Summary", "⚖️ Mix Weights", "🌊 PVM Analysis", "📥 Raw Data"])
+
+with tab_pl:
+    # Top Level Metrics
+    c1, c2, c3, c4 = st.columns(4)
+    nts = df_f['Net_Total_Sales'].sum()
+    gp = df_f['Gross_Profit'].sum()
+    margin = (gp / nts * 100) if nts != 0 else 0
+    
+    c1.metric("Gross Sales", f"${df_f['Gross Sales'].sum():,.0f}")
+    c2.metric("Net Total Sales", f"${nts:,.0f}")
+    c3.metric("Gross Profit", f"${gp:,.0f}")
+    c4.metric("GP Margin %", f"{margin:.1f}%")
+
+    st.divider()
+    st.subheader("Performance by Category")
+    brand_pl = df_f.groupby('Category').agg({
+        'Units': 'sum',
+        'Gross Sales': 'sum',
+        'Net_Total_Sales': 'sum',
+        'Gross_Profit': 'sum'
+    }).reset_index()
+
+    st.dataframe(
+        brand_pl.style.format({
+            'Units': '{:,.0f}', 'Gross Sales': '${:,.0f}', 
+            'Net_Total_Sales': '${:,.0f}', 'Gross_Profit': '${:,.0f}'
+        }), use_container_width=True, hide_index=True
+    )
+
+with tab_weights:
+    st.subheader("Participation % (Mix) by Category")
+    col1, col2 = st.columns(2)
+    
+    weights = df_f.groupby('Category').agg({'Units':'sum', 'Net_Total_Sales':'sum'}).reset_index()
+    weights['% Volume'] = weights['Units'] / weights['Units'].sum()
+    weights['% NTS'] = weights['Net_Total_Sales'] / weights['Net_Total_Sales'].sum()
+    
+    with col1:
+        st.dataframe(
+            weights.style.format({'Units':'{:,.0f}', 'Net_Total_Sales':'${:,.0f}', '% Volume': '{:.1%}', '% NTS': '{:.1%}'}),
+            use_container_width=True, hide_index=True
         )
+    with col2:
+        fig_pie = px.pie(weights, values='Net_Total_Sales', names='Category', hole=0.4, title="NTS Mix %")
+        st.plotly_chart(fig_pie, use_container_width=True)
 
-        # 3. Cálculos de Cascada
-        df_master['Gross_Sales'] = df_master['Units'] * df_master['List Price']
-        df_master['Off_Invoice'] = df_master['Gross_Sales'] * df_master['GTG %']
-        df_master['Net_Shipment'] = df_master['Gross_Sales'] - df_master['Off_Invoice']
+with tab_pvm:
+    st.subheader("Price-Volume-Mix (PVM) Analysis")
+    prev_yr = sel_year - 1
+    df_prev = df_all[df_all['Year'] == prev_yr]
+    
+    if not df_prev.empty:
+        pvm_list = []
+        tot_v1, tot_v2 = df_prev['Units'].sum(), df_f['Units'].sum()
         
-        # 4. Agrupar Trade Spend por Tipo (Agreement vs Activity)
-        trade_pivot = df_tra.groupby(['Year', 'Category', 'Channel', 'Type'])['Percentage'].sum().unstack(fill_value=0)
-        df_master = pd.merge(df_master, trade_pivot, on=['Year', 'Category', 'Channel'], how='left')
-
-        # Asegurar que existan las columnas tras el pivot
-        for col in ['Agreement', 'Activity']:
-            if col not in df_master.columns:
-                df_master[col] = 0
-
-        df_master['Value_Agreements'] = df_master['Gross_Sales'] * df_master['Agreement']
-        df_master['Value_Activities'] = df_master['Gross_Sales'] * df_master['Activity']
+        for cat in sorted(df_all['Category'].unique()):
+            d1 = df_prev[df_prev['Category'] == cat]
+            d2 = df_f[df_f['Category'] == cat]
+            
+            v1, v2 = d1['Units'].sum(), d2['Units'].sum()
+            p1 = (d1['Net_Total_Sales'].sum() / v1) if v1 > 0 else 0
+            p2 = (d2['Net_Total_Sales'].sum() / v2) if v2 > 0 else 0
+            mix1 = v1 / tot_v1 if tot_v1 > 0 else 0
+            mix2 = v2 / tot_v2 if tot_v2 > 0 else 0
+            
+            p_eff = v2 * (p2 - p1)
+            v_eff = (tot_v2 - tot_v1) * mix1 * p1
+            m_eff = tot_v2 * (mix2 - mix1) * p1
+            
+            pvm_list.append({'Category': cat, 'Price Effect': p_eff, 'Volume Effect': v_eff, 'Mix Effect': m_eff, 'Total Delta': (v2*p2)-(v1*p1)})
         
-        df_master['Net_Total_Sales'] = df_master['Net_Shipment'] - df_master['Value_Agreements'] - df_master['Value_Activities']
-        df_master['Total_COGS'] = df_master['Units'] * df_master['Std Cost']
-        df_master['Gross_Profit'] = df_master['Net_Total_Sales'] - df_master['Total_COGS']
-
-        # 5. Formato Final (Unpivot)
-        id_vars = ['Year', 'Category', 'EAN Code', 'Channel', 'Customer Name']
-        value_map = {
-            'Units': 'Volume Units',
-            'Gross_Sales': 'Gross Sales',
-            'Net_Total_Sales': 'Net Total Sales',
-            'Total_COGS': 'COGS',
-            'Gross_Profit': 'Gross Profit'
-        }
+        df_pvm = pd.DataFrame(pvm_list)
         
-        df_final = pd.melt(df_master, id_vars=id_vars, value_vars=list(value_map.keys()),
-                           var_name='Account', value_name='Value')
+        # Waterfall Chart
+        fig_wf = go.Figure(go.Waterfall(
+            orientation = "v",
+            measure = ["absolute", "relative", "relative", "relative", "total"],
+            x = [f"NTS {prev_yr}", "Price", "Volume", "Mix", f"NTS {sel_year}"],
+            y = [df_prev['Net_Total_Sales'].sum(), df_pvm['Price Effect'].sum(), df_pvm['Volume Effect'].sum(), df_pvm['Mix Effect'].sum(), nts],
+            decreasing = {"marker":{"color":"#ef553b"}},
+            increasing = {"marker":{"color":"#00cc96"}},
+            totals = {"marker":{"color":"#002b50"}}
+        ))
+        st.plotly_chart(fig_wf, use_container_width=True)
         
-        df_final['Account'] = df_final['Account'].map(value_map)
-        df_final.columns = ['Year', 'Category', 'EAN', 'Channel', 'Client', 'Account', 'Value']
+        st.dataframe(df_pvm.style.format({
+            'Price Effect': '${:,.0f}', 'Volume Effect': '${:,.0f}', 'Mix Effect': '${:,.0f}', 'Total Delta': '${:,.0f}'
+        }), use_container_width=True, hide_index=True)
+    else:
+        st.warning("Insufficient data for previous year PVM.")
 
-        st.subheader("Vista Previa")
-        st.dataframe(df_final.head(10))
-
-        # Descarga
-        csv_data = df_final.to_csv(index=False).encode('utf-8')
-        st.download_button("Descargar CSV Consolidado", csv_data, "NovaPure_Output.csv", "text/csv")
-        
-    except Exception as e:
-        st.error(f"Error durante el proceso: {e}")
+with tab_download:
+    st.subheader("Raw Account Data")
+    export_cols = ['Channel', 'Category', 'Customer Name', 'EAN_Key', 'Units', 'Gross Sales', 'Net_Total_Sales', 'Gross_Profit']
+    st.dataframe(df_f[export_cols].style.format({'Units':'{:,.0f}', 'Gross Sales':'${:,.2f}', 'Net_Total_Sales':'${:,.2f}', 'Gross_Profit':'${:,.2f}'}), use_container_width=True, hide_index=True)
+    
+    csv = df_f[export_cols].to_csv(index=False).encode('utf-8')
+    st.download_button("📥 Download Excel/CSV Report", csv, f"Financial_Report_{sel_year}.csv", "text/csv")
